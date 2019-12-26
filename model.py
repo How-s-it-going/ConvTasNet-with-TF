@@ -41,7 +41,7 @@ class TemporalConvNet:
         for r in range(hp.R):
             blocks = []
             for x in range(hp.X):
-                dilation = 2**x
+                dilation = 2 ** x
                 padding = (hp.P - 1) * dilation if hp.causal else (hp.P - 1) * dilation // 2
 
 
@@ -60,3 +60,18 @@ class ChannelwiseLayerNorm:
         mean, var = tf.nn.moments(y, axes=1, keep_dims=True)  # [M, 1, K]
         cLN_y = self.gamma * (y - mean) / tf.pow(var + hp.epsilon, 0.5) + self.beta
         return cLN_y
+
+
+class GlobalLayerNorm:
+    def __init__(self, channel_size):
+        self.gamma = tf.Variable(1, trainable=True, shape=[1, channel_size, 1], name='gamma')
+        self.beta = tf.Variable(0, trainable=True, shape=[1, channel_size, 1], name='beta')
+
+    def forward(self, y):
+        mean = tf.reduce_mean(y, axis=[1, 2], keepdims=True)  # [M, 1, 1]
+        var = tf.pow()
+
+
+def chose_norm(norm_type, channel_size):
+    if norm_type == 'gLN':
+        print()
