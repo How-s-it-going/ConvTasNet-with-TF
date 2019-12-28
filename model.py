@@ -1,6 +1,4 @@
 import tensorflow as tf
-import numpy as np
-import librosa
 import hyperparamator as hp
 
 
@@ -42,13 +40,42 @@ class TemporalConvNet:
             blocks = []
             for x in range(hp.X):
                 dilation = 2 ** x
-                padding = (hp.P - 1) * dilation if hp.causal else (hp.P - 1) * dilation // 2
+                blocks += [TemporalBlock(hp.B, hp.H, hp.P, stride=1, dilation=dilation)]
+
+            repeats += [tf.keras.Sequential(blocks)]
+
+        temporal_conv_net = tf.keras.Sequential(repeats)
+        mask_conv = tf.keras.layers.Conv1D(hp.C * hp.N, 1, use_bias=False)  # [M, C * N, K]
+
+        self.network = tf.keras.Sequential([layer_norm, bottleneck_conv1d, temporal_conv_net, mask_conv])
+
+    def forward(self, mixture_w):
+        shape = tf.shape(mixture_w)
+        M, N, K = shape[0], shape[1], shape[2]
+        score = self.network(mixture_w)  # [M, C * N, K]
+        score = tf.reshape(score, shape=[M, hp.C, N, K])  # [M, C, N, K]
+        est_mask = tf.keras.layers.ReLU(score)
+
+        return est_mask
 
 
 class TemporalBlock:
-    def __init__(self, filters, kernel_size):
-        conv1d = tf.keras.layers.Conv1D(filters, 1, use_bias=False)
+    def __init__(self, in_channels, out_channels, kernel_size, stride, dilation):
+        conv1d = tf.keras.layers.Conv1D(out_channels, 1, use_bias=False)
         prelu = tf.keras.layers.PReLU()
+        norm = chose_norm(hp.norm_type, out_channels)
+        dsconv = tf.keras.layers.SeparableConv1D(in_channels, kernel_size, stride,
+                                                 padding='causal' if hp.causal else 'same',
+                                                 dilation_rate=dilation, use_bias=False,
+                                                 activation=tf.keras.layers.PReLU)
+        norm2 = chose_norm(hp.norm_type, in_channels)
+
+        self.net = tf.keras.Sequential([conv1d, prelu, norm, dsconv, norm2])
+
+    def forward(self, x):
+        residual = x
+        out = self.net(x)
+        return out + residual
 
 
 class ChannelwiseLayerNorm:
@@ -69,9 +96,15 @@ class GlobalLayerNorm:
 
     def forward(self, y):
         mean = tf.reduce_mean(y, axis=[1, 2], keepdims=True)  # [M, 1, 1]
-        var = tf.pow()
+        var = tf.reduce_mean(tf.pow((y - mean), 2), axis=[1, 2], keepdims=True)  # [M, 1, 1]
+        gLN_y = self.gamma * (y - mean) / tf.pow(var + hp.epsilon, 0.5) + self.beta
+        return gLN_y
 
 
-def chose_norm(norm_type, channel_size):
+def chose_norm(norm_type, channel_size, is_training=False):
     if norm_type == 'gLN':
-        print()
+        return GlobalLayerNorm(channel_size)
+    elif norm_type == 'cLN':
+        return ChannelwiseLayerNorm(channel_size)
+    else:
+        return tf.keras.layers.BatchNormalization(axis=1, trainable=is_training)  # BN.
